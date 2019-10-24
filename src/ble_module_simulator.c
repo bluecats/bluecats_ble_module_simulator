@@ -208,6 +208,9 @@ int main(int argc, char **argv) {
 		pdu->payData[6] = rssi;
 		pdu->payData[7] = channel;
 
+		//copy mac to end of eddy
+		memcpy(pdu->payData+payHdrLen + 23, &mac, 6);
+
 		//pay length
 		int adLen = sizeof(exEddy);
 		pdu->hdr.payLen = payHdrLen + adLen;
