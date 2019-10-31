@@ -301,6 +301,14 @@ int main(int argc, char **argv) {
 
 	printf("----------------------------------\n");
 	printf(
+			"Parameters:\n"
+			"Num Devices: %i\n"
+			"Num Ads: %i\n"
+			"Ad rate: %i ms\n",
+			NUM_ADS_TOTAL, NUM_DEVICES, SLEEP_TIME_MILLIS);
+	printf("----------------------------------\n");
+	printf(
+			"Results:\n"
 			"Test time:          %f\n"
 			"Sent/Recvd ads      %lli/%lli\n"
 			"Sent Ads/Sec        %f\n"
