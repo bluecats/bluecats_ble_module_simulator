@@ -1,0 +1,43 @@
+How to use:
+
+Step 1: Setup ftdi cable and edge1 board
+
+Find edge1 board without bc ble module.
+Connect FTDI usb-serial cable from computer to edge1 uart pins 
+You should see the ftdi device show up otherwise you may have to install ftdi driver.
+
+Step 2: 
+
+Connect to edge1 LuCi in browser (ethernet or wifi)
+Add udp forwarding endpoint pointing to your computer
+
+Step 3:
+Run ble module simulator. 
+You can use the released binary 'releases/' if available for your platform.
+Otherwise, you need to compile from source.
+
+Run
+sudo ./ble_module_simulator PATH_TO_SERIAL_DEV NUM_ADS NUM_TAGS AD_RATE_MILLIS UDP_LISTEN_PORT
+
+ex.
+
+sudo ./ble_module_simulator /dev/ttyUSB0 5000 5000 5 9942
+
+output:
+
+Serial Port is /dev/ttyUSB0 
+UDP listen port 9942
+Sent 225000 bytes: i=5000, 100.00%
+Done! Give recv thread 2 seconds to catchup...Rest is considered 'dropped'
+
+----------------------------------
+Test time:          23.724755
+Sent/Recvd ads      5000/5000
+Sent Ads/Sec        210.750332
+Recvd Ads/Sec       210.660287
+Sent/Recvd bytes    225000/415000
+Sent bytes/sec      9483.764954
+Recvd bytes/sec     17484.803810
+----------------------------------
+
+

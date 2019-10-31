@@ -17,6 +17,12 @@
 #include <termios.h>
 #include <errno.h>
 #include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <netdb.h>
+#include <pthread.h>
+#include <error.h>
+#include <sys/time.h>
 
 typedef struct serialApiPDUHdr_t
 {
@@ -33,6 +39,11 @@ typedef struct serialApiPDU_t
 	serialApiPDUHdr_t hdr;
 	unsigned char payData[];
 } __attribute__ ((packed)) serialApiPDU_t;
+
+void * upd_listen(void *args);
+static long long g_recvd_total_bytes = 0;
+static long long g_recvd_total_ads = 0;
+static struct timeval g_recv_last;
 
 int util_packet_to_hex_string(void* packet, int len, char sep, char buf[])
 {
@@ -136,7 +147,7 @@ int main(int argc, char **argv) {
 	srand(time(NULL));
 
 	if(argc < 3) {
-		printf("Requires serial port, total ads, num devs, ad rate millis as arguments\n");
+		printf("Requires serial port, total ads, num devs, ad rate as arguments and listen port (optional)\n");
 		return 0;
 	}
 
@@ -159,6 +170,18 @@ int main(int argc, char **argv) {
 	int NUM_ADS_TOTAL = strtol(argv[2], NULL, 10);
 	int NUM_DEVICES = strtol(argv[3], NULL, 10);
 	int SLEEP_TIME_MILLIS = strtol(argv[4], NULL, 10);
+	int listen_port = 0;
+
+	pthread_t threadId=0;
+	if(argv[5]) {
+		listen_port = strtol(argv[5], NULL, 10);
+		int *i = malloc(sizeof(int));
+		*i = listen_port;
+
+		//start the listening thread
+		pthread_create(&threadId, NULL, upd_listen, i);
+		pthread_detach(threadId);
+	}
 
 	//unsigned char testAd[] = {0x80, 0xBC, 0x10, 0x27, 0xE7, 0x3B, 0xB2, 0xF9,
 	//			0x05, 0x2D, 0x07, 0x98, 0xB8, 0x25, 0x02, 0x01, 0x06, 0x03, 0x03,
@@ -192,11 +215,20 @@ int main(int argc, char **argv) {
 	//char mac[] = {0xB2, 0xF9, 0x05, 0x2D, 0x07, 0x98};
 
 
+	long long bytes_sent_total = 0;
 	long long i = 0;
-	int bufLen = 1000;
+
+	//can make this longer to simulate writing multiple ads per send
+	//hardcode to 64 to cli arg matches ad rate
+	int bufLen = 64;
+
 	unsigned char *cBuf = calloc(1,bufLen);
 	int bufIdx = 0;
 	int forever = 0 || (NUM_ADS_TOTAL == 0);
+
+	struct timeval stop, start;
+	gettimeofday(&start, NULL);
+
 	while(forever || (i < NUM_ADS_TOTAL)) {
 
 		long mac = rand() % NUM_DEVICES;
@@ -219,15 +251,24 @@ int main(int argc, char **argv) {
 		pdu->hdr.payCRC8 = serial_api_crc8(pdu->payData, pdu->hdr.payLen);
 		pdu->hdr.hdrCRC8 = serial_api_crc8(pdu, sizeof(serialApiPDU_t)-1);
 
-		//lets write some data
+		//lets write some ads
 		int pduLen = sizeof(serialApiPDUHdr_t) + pdu->hdr.payLen;
 
 		if(bufIdx+pduLen>bufLen){
 
 			serial_write(sp, cBuf, bufIdx);
-			printf("\n\nJust Wrote %i bytes: i=%lli\n\n", bufIdx,i);
+			bytes_sent_total+=bufIdx;
+
+			if(i%100 == 0) {
+				printf("Sent %lli bytes: i=%lli, %.02f%%\r", bytes_sent_total,i, 100*(float)i/NUM_ADS_TOTAL);
+				fflush(stdout);
+			}
 			bufIdx = 0;
-			usleep(1000 * SLEEP_TIME_MILLIS);
+
+			//rand sleep to simulate 'bursty' ads
+			//should average to SLEEP_TIME_MILLIS
+			long stime = rand() % (2*SLEEP_TIME_MILLIS);
+			usleep(1000 * stime);
 		}
 
 		memcpy(cBuf+bufIdx, pdu, pduLen);
@@ -235,18 +276,90 @@ int main(int argc, char **argv) {
 
 		util_packet_reverse((unsigned char *)&mac, 6);
 		util_packet_to_hex_string(&mac, 6,' ',hexStr);
-		printf("%s\n", hexStr);
 
-		//util_packet_to_hex_string(pdu, totalLen,' ',hexStr);
-		//printf("%s\n", hexStr);
-
-		//sleep(1);
 		i++;
 	}
-	usleep(100000);
 
-	//write remaining bytes in buf
-	printf("Writing remaining buffer\n");
+	//write remaining buffer...
 	serial_write(sp, cBuf, bufIdx);
+	bytes_sent_total+=bufIdx;
+	gettimeofday(&stop, NULL);
+
+	printf("Sent %lli bytes: i=%lli, %.02f%%\n", bytes_sent_total,i, 100*(float)i/NUM_ADS_TOTAL);
+
+	if(threadId) {
+		//sleep for recv thread to catch up (if it can)
+		//hardcode 1 second for network latency (rest is 'dropped')
+		printf("Done! Give recv thread 2 seconds to catchup...Rest is considered 'dropped'\n");
+		sleep(2);
+		pthread_cancel(threadId);
+		printf("\n");
+	}
+
+	double time_spent_millis = (double) (stop.tv_sec - start.tv_sec) * 1000 + (double) (stop.tv_usec - start.tv_usec) / 1000;
+	double time_recvd_millis = (double) (g_recv_last.tv_sec - start.tv_sec) * 1000 + (double) (g_recv_last.tv_usec - start.tv_usec) / 1000;
+
+	printf("----------------------------------\n");
+	printf(
+			"Test time:          %f\n"
+			"Sent/Recvd ads      %lli/%lli\n"
+			"Sent Ads/Sec        %f\n"
+			"Recvd Ads/Sec       %f\n"
+			"Sent/Recvd bytes    %lli/%lli\n"
+			"Sent bytes/sec      %f\n"
+			"Recvd bytes/sec     %f\n",
+			time_spent_millis/1000,
+			i,g_recvd_total_ads,
+			(float)i/(time_spent_millis/1000),
+			(float)g_recvd_total_ads/(time_recvd_millis/1000),
+			bytes_sent_total, g_recvd_total_bytes,
+			(float)bytes_sent_total/(time_spent_millis/1000),
+			(float)g_recvd_total_bytes/(time_recvd_millis/1000)),
+	printf("----------------------------------\n");
+}
+
+#define BUFSIZE 1024
+void * upd_listen(void *args) {
+
+
+	int sock, length, n;
+	struct sockaddr_in server;
+	struct sockaddr_in clientaddr;
+	socklen_t clientlen;
+	unsigned char buf[BUFSIZE];
+
+	int port = *(int *)args;
+	free(args);
+
+	sock = socket(AF_INET, SOCK_DGRAM, 0);
+	if (sock < 0) {
+		printf("Error Opening socket\n");
+		return 0;
+	}
+
+	length = sizeof(server);
+	bzero(&server,length);
+	server.sin_family = AF_INET;
+	server.sin_addr.s_addr = INADDR_ANY;
+	server.sin_port=htons(port);
+
+	/* bind port to the IP */
+	if (bind(sock, (struct sockaddr *) &server, length) < 0) {
+		printf("Error binding\n");
+		return 0;
+	}
+
+	printf("UDP listen port %i\n", port);
+	while(1) {
+		bzero(buf, BUFSIZE);
+		n = recvfrom(sock, buf, BUFSIZE, 0, (struct sockaddr *) &clientaddr, &clientlen);
+		if (n < 0)
+			printf("ERROR in recvfrom\n");
+		g_recvd_total_bytes+=n;
+		g_recvd_total_ads++;
+		gettimeofday(&g_recv_last, NULL);
+	}
+
+	return 0;
 
 }
